@@ -60,9 +60,12 @@ static std::vector<cv::Scalar> colors{
 struct PoseAttribute {
   // 单位米，并使用NaN初始化
   float width = 0.0f / 0.0f;
+  float height = 0.0f / 0.0f;
   float x = 0.0f / 0.0f;
   float y = 0.0f / 0.0f;
   float z = 0.0f / 0.0f;
+  // 检测分数
+  float score = 0.0f / 0.0f;
 };
 
 // 系统状态
@@ -107,6 +110,9 @@ class TrosPerceptionRenderNode : public rclcpp::Node {
   std::string sub_fusion_grid_map_topic_name_ = "tros_occgrid_seg";
   std::string pub_render_grid_map_topic_name_ = "tros_render_grid_map_img";
   std::string pub_render_perc_map_topic_name_ = "tros_render_perc_map_img";
+  bool render_sys_info_ = true;
+  bool render_map_ = false;
+  bool render_perc_map_ = false;
 
   message_filters::Subscriber<ai_msgs::msg::PerceptionTargets> sub_perc_;
   message_filters::Subscriber<sensor_msgs::msg::CompressedImage> sub_img_;

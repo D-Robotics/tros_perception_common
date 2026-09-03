@@ -26,23 +26,29 @@ TrosPerceptionRenderNode::TrosPerceptionRenderNode(const rclcpp::NodeOptions &op
   pub_render_topic_name_= this->declare_parameter("pub_render_topic_name", pub_render_topic_name_);
   pub_render_grid_map_topic_name_ = this->declare_parameter("pub_render_grid_map_topic_name", pub_render_grid_map_topic_name_);
   pub_render_perc_map_topic_name_ = this->declare_parameter("pub_render_perc_map_topic_name", pub_render_perc_map_topic_name_);
+  render_sys_info_ = this->declare_parameter("render_sys_info", render_sys_info_);
+  render_map_ = this->declare_parameter("render_map", render_map_);
 
   RCLCPP_WARN_STREAM(this->get_logger(),
-    "\n perception_topic_name [" << perception_topic_name_ << "]"
-    << "\n img_topic_name [" << img_topic_name_ << "]"
-    << "\n sub_nav_grid_map_topic_name [" << sub_nav_grid_map_topic_name_ << "]"
+    "\n             perception_topic_name [" << perception_topic_name_ << "]"
+    << "\n                 img_topic_name [" << img_topic_name_ << "]"
+    << "\n    sub_nav_grid_map_topic_name [" << sub_nav_grid_map_topic_name_ << "]"
     << "\n sub_fusion_grid_map_topic_name [" << sub_fusion_grid_map_topic_name_ << "]"
-    << "\n pub_render_topic_name [" << pub_render_topic_name_ << "]"
+    << "\n          pub_render_topic_name [" << pub_render_topic_name_ << "]"
     << "\n pub_render_grid_map_topic_name [" << pub_render_grid_map_topic_name_ << "]"
     << "\n pub_render_perc_map_topic_name [" << pub_render_perc_map_topic_name_ << "]"
+    << "\n                render_sys_info [" << (render_sys_info_ ? "true" : "false") << "]"
+    << "\n                     render_map [" << (render_map_ ? "true" : "false") << "]"
   );
 
-  system_status_thread_ = std::thread([this](){
-    while (rclcpp::ok()) {
-      GetSystemStatus();
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-  });
+  if (render_sys_info_) {
+    system_status_thread_ = std::thread([this](){
+      while (rclcpp::ok()) {
+        GetSystemStatus();
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+      }
+    });
+  }
 
   render_img_publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
     pub_render_topic_name_,
@@ -61,17 +67,18 @@ TrosPerceptionRenderNode::TrosPerceptionRenderNode(const rclcpp::NodeOptions &op
   perc_synchronizer_->registerCallback(std::bind(&TrosPerceptionRenderNode::PercTopicSyncCallback,
     this, std::placeholders::_1, std::placeholders::_2));
 
-  sub_nav_grid_map_.subscribe(this, sub_nav_grid_map_topic_name_);
-  sub_fusion_grid_map_.subscribe(this, sub_fusion_grid_map_topic_name_);
-  grid_map_synchronizer_ = std::make_shared<message_filters::Synchronizer<GridMapCustomSyncPolicyType>>(
-    GridMapCustomSyncPolicyType(10), sub_nav_grid_map_, sub_fusion_grid_map_);
-  grid_map_synchronizer_->registerCallback(std::bind(&TrosPerceptionRenderNode::GridMapTopicSyncCallback,
-    this, std::placeholders::_1, std::placeholders::_2));
-
-  perc_map_synchronizer_ = std::make_shared<message_filters::Synchronizer<PercMapCustomSyncPolicyType>>(
-    PercMapCustomSyncPolicyType(10), sub_perc_, sub_img_, sub_fusion_grid_map_);
-  perc_map_synchronizer_->registerCallback(std::bind(&TrosPerceptionRenderNode::PercMapTopicSyncCallback,
-    this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+  if (render_map_) {
+    sub_nav_grid_map_.subscribe(this, sub_nav_grid_map_topic_name_);
+    sub_fusion_grid_map_.subscribe(this, sub_fusion_grid_map_topic_name_);
+    grid_map_synchronizer_ = std::make_shared<message_filters::Synchronizer<GridMapCustomSyncPolicyType>>(
+      GridMapCustomSyncPolicyType(10), sub_nav_grid_map_, sub_fusion_grid_map_);
+    grid_map_synchronizer_->registerCallback(std::bind(&TrosPerceptionRenderNode::GridMapTopicSyncCallback,
+      this, std::placeholders::_1, std::placeholders::_2));
+    perc_map_synchronizer_ = std::make_shared<message_filters::Synchronizer<PercMapCustomSyncPolicyType>>(
+      PercMapCustomSyncPolicyType(10), sub_perc_, sub_img_, sub_fusion_grid_map_);
+    perc_map_synchronizer_->registerCallback(std::bind(&TrosPerceptionRenderNode::PercMapTopicSyncCallback,
+      this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+  }
 }
 
 void TrosPerceptionRenderNode::PercTopicSyncCallback(
@@ -267,23 +274,24 @@ int TrosPerceptionRenderNode::Render(
   if (!msg_perc || !msg_img) return -1;
   mat = compressedImageToMat(msg_img);  
   if (mat.empty()) {
-    RCLCPP_ERROR(rclcpp::get_logger("ImageUtils"), "Failed to decode image.");
+    RCLCPP_ERROR(this->get_logger(), "Failed to decode image.");
     return -1;
   }
 
-  RCLCPP_INFO(rclcpp::get_logger("ImageUtils"),
+  RCLCPP_INFO(this->get_logger(),
               "target size: %ld",
               msg_perc->targets.size());
   for (size_t idx = 0; idx < msg_perc->targets.size(); idx++) {
     const auto &target = msg_perc->targets.at(idx);
-    RCLCPP_INFO(rclcpp::get_logger("ImageUtils"),
-                "target type: %s, rois.size: %ld",
+    RCLCPP_INFO(this->get_logger(),
+                "target type: %s, track_id: %ld, rois.size: %ld",
                 target.type.c_str(),
+                target.track_id,
                 target.rois.size());
     auto &color = colors[idx % colors.size()];
     for (const auto &roi : target.rois) {
       RCLCPP_INFO(
-          rclcpp::get_logger("ImageUtils"),
+          this->get_logger(),
           "roi.type: %s, x_offset: %d y_offset: %d width: %d height: %d",
           roi.type.c_str(),
           roi.rect.x_offset,
@@ -302,7 +310,7 @@ int TrosPerceptionRenderNode::Render(
       }
       if (!roi_type.empty()) {
         cv::putText(mat,
-                    roi_type,
+                    roi_type + "_" + std::to_string(target.track_id),
                     cv::Point2f(roi.rect.x_offset, roi.rect.y_offset - 10),
                     cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,
                     0.5,
@@ -321,12 +329,21 @@ int TrosPerceptionRenderNode::Render(
       for (const auto& attr : target.attributes) {
         if (attr.type == "width_cm") {
           pose_attr.width = attr.value / 100.0;
+        } else if (attr.type == "height_cm") {
+          pose_attr.height = attr.value / 100.0;
         } else if (attr.type == "x_cm") {
           pose_attr.x = attr.value / 100.0;
         } else if (attr.type == "y_cm") {
           pose_attr.y = attr.value / 100.0;
         } else if (attr.type == "z_cm") {
           pose_attr.z = attr.value / 100.0;
+        }
+      }
+      // Score is the person ROI's confidence, not an attribute.
+      for (const auto& roi : target.rois) {
+        if (roi.type == "person") {
+          pose_attr.score = roi.confidence;
+          break;
         }
       }
 
@@ -336,23 +353,47 @@ int TrosPerceptionRenderNode::Render(
         // if (render_y < 0 ) render_y = 0;
         // if (render_y > mat.rows) render_y = mat.rows;
         cv::putText(mat,
-                    "xyz (" + tools_.FloatToString(pose_attr.x) + ", " + tools_.FloatToString(pose_attr.y) + ", " + tools_.FloatToString(pose_attr.z) + ")",
+                    "xy_cam (" + tools_.FloatToString(pose_attr.x) + ", " + tools_.FloatToString(pose_attr.y) + ")",
                     cv::Point2f(pt_x, pt_y + y_offset),
                     cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,
                     1.0,
                     color_attr,
                     2.0);
       }
-      if (!std::isnan(pose_attr.width)) {
+      if (!std::isnan(pose_attr.width) || !std::isnan(pose_attr.height)) {
         y_offset += 30;
+        std::string wh = "wh (";
+        wh += std::isnan(pose_attr.width) ? "nan" : tools_.FloatToString(pose_attr.width);
+        wh += ", ";
+        wh += std::isnan(pose_attr.height) ? "nan" : tools_.FloatToString(pose_attr.height);
+        wh += ")";
         cv::putText(mat,
-                    "width (" + tools_.FloatToString(pose_attr.width) + ")",
+                    wh,
                     cv::Point2f(pt_x, pt_y + y_offset),
                     cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,
                     1.0,
                     color_attr,
                     2.0);
-
+      }
+      {
+        y_offset += 30;
+        cv::putText(mat,
+                    "id (" + std::to_string(target.track_id) + ")",
+                    cv::Point2f(pt_x, pt_y + y_offset),
+                    cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    color_attr,
+                    2.0);
+      }
+      if (!std::isnan(pose_attr.score)) {
+        y_offset += 30;
+        cv::putText(mat,
+                    "score (" + tools_.FloatToString(pose_attr.score) + ")",
+                    cv::Point2f(pt_x, pt_y + y_offset),
+                    cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    color_attr,
+                    2.0);
       }
     }
 
@@ -389,34 +430,36 @@ int TrosPerceptionRenderNode::Render(
     }
   }
 
-  // 渲染时间戳
-  std::string timestamp_str = std::to_string(msg_img->header.stamp.sec) + std::string(".") +
-    std::to_string(msg_img->header.stamp.nanosec);
-  cv::putText(mat,
-              timestamp_str,
-              cv::Point2f(10, 30),
-              cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,
-              1.0,
-              cv::Scalar(0, 255, 0),
-              2.0);  
+  if (render_sys_info_) {
+    // 渲染时间戳
+    std::string timestamp_str = std::to_string(msg_img->header.stamp.sec) + std::string(".") +
+      std::to_string(msg_img->header.stamp.nanosec);
+    cv::putText(mat,
+                timestamp_str,
+                cv::Point2f(10, 30),
+                cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,
+                1.0,
+                cv::Scalar(0, 255, 0),
+                2.0);  
 
-  // 渲染系统信息
-  std::string system_status =
-    "CPU: " + tools_.FloatToString(system_status_->cpu_usage) + "%" +
-    ", Temp: " + system_status_->temperature;
-  cv::putText(mat,
-              system_status,
-              cv::Point2f(10, 70),
-              cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,
-              1.0,
-              cv::Scalar(0, 255, 0),
-              2.0);  
+    // 渲染系统信息
+    std::string system_status =
+      "CPU: " + tools_.FloatToString(system_status_->cpu_usage) + "%" +
+      ", Temp: " + system_status_->temperature;
+    cv::putText(mat,
+                system_status,
+                cv::Point2f(10, 70),
+                cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,
+                1.0,
+                cv::Scalar(0, 255, 0),
+                2.0);  
+  }
 
   // std::string saving_path = "render_" + msg_perc->header.frame_id + "_" +
   //                           std::to_string(msg_perc->header.stamp.sec) + "_" +
   //                           std::to_string(msg_perc->header.stamp.nanosec) +
   //                           ".jpeg";
-  // RCLCPP_WARN(rclcpp::get_logger("ImageUtils"),
+  // RCLCPP_WARN(this->get_logger(),
   //             "Draw result to file: %s",
   //             saving_path.c_str());
   // cv::imwrite(saving_path, mat);
@@ -545,7 +588,7 @@ int TrosPerceptionRenderNode::RenderGridMap(
   //     + std::to_string(grid->header.stamp.sec) + "_"
   //     + std::to_string(grid->header.stamp.nanosec)
   //     + ".jpeg";
-  //   RCLCPP_WARN(rclcpp::get_logger("ImageUtils"),
+  //   RCLCPP_WARN(this->get_logger(),
   //               "Draw result to file: %s",
   //               saving_path.c_str());
   //   cv::imwrite(saving_path, mat);
